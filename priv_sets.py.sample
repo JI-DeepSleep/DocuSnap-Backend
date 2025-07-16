@@ -1,0 +1,20 @@
+MAX_OCR_CONCURRENCY = 4
+MAX_REQUEST_CONCURRENCY = 20
+
+OCR_API_PREFIX = "http://localhost:14410"
+
+LLM_API_KEY = "Fill in the API keys"
+
+LLM_MODEL = "glm-4-plus"
+# LLM_MODEL = "glm-z1-airx"
+# LLM_MODEL = "glm-4-airx"
+
+EXPIRE_MINUTES = 1440
+
+MAX_IMAGE_SIZE = 20 * 1024 * 1024
+
+with open("private_key.pem", "r") as file:
+    RSA_PRIVATE_KEY = file.read()
+
+with open("public_key.pem", "r") as file:
+    RSA_PUBLIC_KEY = file.read()

@@ -1,0 +1,8 @@
+/env/
+*.db
+__pycache__
+private_key.pem
+public_key.pem
+priv_sets.py
+sync.sh
+/document_samples/

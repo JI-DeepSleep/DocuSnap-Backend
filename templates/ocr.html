@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document & Form Processor</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    .container {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .section {
+      border: 1px solid #ddd;
+      padding: 15px;
+      border-radius: 5px;
+    }
+
+    .preview-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .preview-img {
+      max-width: 150px;
+      max-height: 150px;
+      border: 1px dashed #ccc;
+    }
+
+    .result-container {
+      min-height: 100px;
+      border: 1px solid #ddd;
+      padding: 10px;
+      margin-top: 10px;
+    }
+
+    button {
+      padding: 10px 15px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+
+    button:disabled {
+      background-color: #cccccc;
+    }
+
+    .status {
+      color: #666;
+      font-style: italic;
+      margin-top: 5px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+
+    th,
+    td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+    }
+
+    th {
+      background-color: #f2f2f2;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .file-info {
+      margin: 5px 0;
+    }
+
+    .fill-section {
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid #eee;
+    }
+  </style>
+  <script>
+    const publicKeyPem = `{{ public_key | safe }}`;
+    const TEMP_FILE_LIB = {{ mockup_file_lib | tojson | safe }};
+    console.log(TEMP_FILE_LIB)
+  </script>
+</head>
+
+<body>
+  <div class="container">
+    <h1>Document & Form Processor</h1>
+    <div class="section">
+      <h2>Client Information</h2>
+      <p><strong>Client ID:</strong> <span id="clientId"></span></p>
+      <button id="clearBtn">Clear Local Data</button>
+    </div>
+    <div class="section">
+      <h2>Document Processing</h2>
+      <input type="file" id="docInput" accept="image/*" multiple>
+      <div class="preview-container" id="docPreviewContainer"></div>
+      <button id="processDocBtn" disabled>Process Document</button>
+      <div id="docStatus" class="status"></div>
+      <div id="docResult" class="result-container">No results yet...</div>
+    </div>
+    <div class="section">
+      <h2>Form Processing</h2>
+      <input type="file" id="formInput" accept="image/*" multiple>
+      <div class="preview-container" id="formPreviewContainer"></div>
+      <button id="processFormBtn" disabled>Process Form</button>
+      <div id="formStatus" class="status"></div>
+      <div id="formResult" class="result-container">No results yet...</div>
+
+      <!-- New Auto Fill Section -->
+      <div class="fill-section">
+        <h3>Form Auto Fill</h3>
+        <button id="autoFillBtn" disabled>Auto Fill</button>
+        <div id="fillStatus" class="status"></div>
+        <div id="fillResult" class="result-container">No fill results yet...</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    // Cache for AES keys per request
+    const aesKeyCache = {};
+    let lastFormResult = null; // Store the last processed form result
+
+    function initClient () {
+      let clientId = localStorage.getItem('clientId');
+      if (!clientId) {
+        clientId = crypto.randomUUID();
+        localStorage.setItem('clientId', clientId);
+      }
+      document.getElementById('clientId').textContent = clientId;
+      return { clientId };
+    }
+
+    function getApiEndpoint (path) {
+      const isDocusnap = window.location.host === 'docusnap.zjyang.dev';
+      return isDocusnap ? `/api/v1${path}` : path;
+    }
+
+    const clientInfo = initClient();
+
+    document.getElementById('clearBtn').addEventListener('click', function () {
+      localStorage.removeItem('clientId');
+      alert('Local data cleared. Page will reload.');
+      location.reload();
+    });
+
+    async function rsaEncrypt (data) {
+      const pemContents = publicKeyPem
+        .replace('-----BEGIN PUBLIC KEY-----', '')
+        .replace('-----END PUBLIC KEY-----', '')
+        .replace(/\s+/g, '');
+      const binaryDer = Uint8Array.from(atob(pemContents), c => c.charCodeAt(0));
+      const publicKey = await crypto.subtle.importKey(
+        "spki",
+        binaryDer,
+        { name: "RSA-OAEP", hash: "SHA-256" },
+        true,
+        ["encrypt"]
+      );
+      const encrypted = await crypto.subtle.encrypt(
+        { name: "RSA-OAEP" },
+        publicKey,
+        data
+      );
+      return arrayBufferToBase64(encrypted);
+    }
+
+    async function aesEncrypt (data, keyBytes) {
+      const iv = crypto.getRandomValues(new Uint8Array(16));
+      const cryptoKey = await crypto.subtle.importKey(
+        "raw",
+        keyBytes,
+        { name: "AES-CBC" },
+        false,
+        ["encrypt"]
+      );
+      let dataBuffer;
+      if (typeof data === 'string') {
+        dataBuffer = new TextEncoder().encode(data).buffer;
+      } else {
+        dataBuffer = data;
+      }
+      const encrypted = await crypto.subtle.encrypt(
+        { name: "AES-CBC", iv },
+        cryptoKey,
+        dataBuffer
+      );
+      const combined = new Uint8Array(iv.length + encrypted.byteLength);
+      combined.set(iv, 0);
+      combined.set(new Uint8Array(encrypted), iv.length);
+      return arrayBufferToBase64(combined);
+    }
+
+    async function aesDecrypt (encryptedDataBase64, keyBytes) {
+      const encryptedBytes = base64ToArrayBuffer(encryptedDataBase64);
+      const iv = encryptedBytes.slice(0, 16);
+      const ciphertext = encryptedBytes.slice(16);
+      const cryptoKey = await crypto.subtle.importKey(
+        "raw",
+        keyBytes,
+        { name: "AES-CBC" },
+        false,
+        ["decrypt"]
+      );
+      const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-CBC", iv },
+        cryptoKey,
+        ciphertext
+      );
+      return new TextDecoder().decode(decrypted);
+    }
+
+    async function computeSHA256 (data) {
+      const buffer = typeof data === 'string'
+        ? new TextEncoder().encode(data).buffer
+        : data;
+      const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function arrayBufferToBase64 (buffer) {
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return btoa(binary);
+    }
+
+    function base64ToArrayBuffer (base64) {
+      const binaryString = atob(base64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return bytes;
+    }
+
+    function handleFileInputChange (inputId, previewContainerId, processBtnId) {
+      const input = document.getElementById(inputId);
+      const previewContainer = document.getElementById(previewContainerId);
+      const processBtn = document.getElementById(processBtnId);
+      input.addEventListener('change', function (e) {
+        previewContainer.innerHTML = '';
+        const files = Array.from(e.target.files);
+        if (files.length === 0) {
+          processBtn.disabled = true;
+          return;
+        }
+        processBtn.disabled = false;
+        files.forEach(file => {
+          const fileInfo = document.createElement('div');
+          fileInfo.className = 'file-info';
+          fileInfo.textContent = `${file.name} (${Math.round(file.size / 1024)} KB)`;
+          previewContainer.appendChild(fileInfo);
+        });
+      });
+    }
+
+    // Initialize file inputs
+    handleFileInputChange('docInput', 'docPreviewContainer', 'processDocBtn');
+    handleFileInputChange('formInput', 'formPreviewContainer', 'processFormBtn');
+
+    async function processFiles (type, inputId, statusElement, resultElement) {
+      const input = document.getElementById(inputId);
+      const files = Array.from(input.files);
+      if (files.length === 0) {
+        statusElement.textContent = "No files selected";
+        return;
+      }
+
+      const btn = document.getElementById(`process${type.charAt(0).toUpperCase() + type.slice(1)}Btn`);
+      btn.disabled = true;
+      statusElement.textContent = "Processing...";
+
+      try {
+        const base64Images = await Promise.all(files.map(async file => {
+          const buffer = await file.arrayBuffer();
+          return arrayBufferToBase64(buffer);
+        }));
+
+        const innerPayload = {
+          to_process: base64Images,
+          file_lib: TEMP_FILE_LIB
+        };
+
+        const innerJson = JSON.stringify(innerPayload);
+        const innerJsonBytes = new TextEncoder().encode(innerJson);
+        const aesKeyBytes = crypto.getRandomValues(new Uint8Array(32));
+        const encryptedContent = await aesEncrypt(innerJsonBytes, aesKeyBytes);
+        const sha256 = await computeSHA256(encryptedContent);
+        const encryptedAesKey = await rsaEncrypt(aesKeyBytes);
+
+        aesKeyCache[sha256] = aesKeyBytes;
+
+        const response = await fetch(getApiEndpoint('/process'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_id: clientInfo.clientId,
+            type: type,
+            SHA256: sha256,
+            has_content: true,
+            aes_key: encryptedAesKey,
+            content: encryptedContent
+          })
+        });
+
+        const result = await response.json();
+        if (result.status === 'processing') {
+          await pollResult(type, sha256, statusElement, resultElement);
+        } else if (result.status === 'completed') {
+          await handleCompletedResult(result, resultElement, statusElement, sha256, type);
+        } else if (result.status === 'error') {
+          statusElement.textContent = `Error: ${result.error_detail}`;
+          resultElement.textContent = "Processing failed";
+        }
+      } catch (error) {
+        console.error('Processing error:', error);
+        statusElement.textContent = `Error: ${error.message}`;
+        resultElement.textContent = "Processing failed";
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function pollResult (type, sha256, statusElement, resultElement) {
+      const endpoint = getApiEndpoint('/process');
+      const maxAttempts = 300;
+      let attempts = 0;
+
+      const poll = async () => {
+        attempts++;
+        try {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              client_id: clientInfo.clientId,
+              type: type,
+              SHA256: sha256,
+              has_content: false
+            })
+          });
+
+          const result = await response.json();
+          if (result.status === 'processing') {
+            statusElement.textContent = `Processing... (${attempts}/${maxAttempts})`;
+            if (attempts < maxAttempts) {
+              setTimeout(poll, 1000);
+            } else {
+              statusElement.textContent = "Processing timed out";
+              resultElement.textContent = "Processing took too long";
+            }
+          } else if (result.status === 'completed') {
+            await handleCompletedResult(result, resultElement, statusElement, sha256, type);
+          } else if (result.status === 'error') {
+            statusElement.textContent = `Error: ${result.error_detail}`;
+            resultElement.textContent = "Processing failed";
+          }
+        } catch (error) {
+          console.error('Polling error:', error);
+          statusElement.textContent = `Error: ${error.message}`;
+          resultElement.textContent = "Polling failed";
+        }
+      };
+
+      await poll();
+    }
+
+    async function handleCompletedResult (result, resultElement, statusElement, sha256, type) {
+      try {
+        const aesKeyBytes = aesKeyCache[sha256];
+        if (!aesKeyBytes) {
+          throw new Error("AES key not found for this request");
+        }
+
+        const decryptedResult = await aesDecrypt(result.result, aesKeyBytes);
+        const resultObj = JSON.parse(decryptedResult);
+
+        resultElement.innerHTML = renderResults(resultObj);
+        statusElement.textContent = "Completed!";
+
+        // Store form result for auto-fill if this was a form processing
+        if (type === 'form') {
+          lastFormResult = resultObj;
+          document.getElementById('autoFillBtn').disabled = false;
+        }
+
+        delete aesKeyCache[sha256];
+      } catch (error) {
+        console.error('Result handling error:', error);
+        statusElement.textContent = "Error processing result";
+        resultElement.textContent = "Failed to decrypt or parse result";
+      }
+    }
+
+    // New function to handle auto-fill processing
+    async function processFill () {
+      const fillStatus = document.getElementById('fillStatus');
+      const fillResult = document.getElementById('fillResult');
+      const autoFillBtn = document.getElementById('autoFillBtn');
+
+      if (!lastFormResult) {
+        fillStatus.textContent = "Error: No form result available";
+        return;
+      }
+
+      autoFillBtn.disabled = true;
+      fillStatus.textContent = "Processing auto-fill...";
+      fillResult.textContent = "Processing...";
+
+      try {
+        const innerPayload = {
+          to_process: lastFormResult,
+          file_lib: TEMP_FILE_LIB
+        };
+
+        const innerJson = JSON.stringify(innerPayload);
+        const innerJsonBytes = new TextEncoder().encode(innerJson);
+        const aesKeyBytes = crypto.getRandomValues(new Uint8Array(32));
+        const encryptedContent = await aesEncrypt(innerJsonBytes, aesKeyBytes);
+        const sha256 = await computeSHA256(encryptedContent);
+        const encryptedAesKey = await rsaEncrypt(aesKeyBytes);
+
+        aesKeyCache[sha256] = aesKeyBytes;
+
+        const response = await fetch(getApiEndpoint('/process'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_id: clientInfo.clientId,
+            type: 'fill',
+            SHA256: sha256,
+            has_content: true,
+            aes_key: encryptedAesKey,
+            content: encryptedContent
+          })
+        });
+
+        const result = await response.json();
+        if (result.status === 'processing') {
+          await pollFillResult(sha256);
+        } else if (result.status === 'completed') {
+          await handleFillResult(result, sha256);
+        } else if (result.status === 'error') {
+          fillStatus.textContent = `Error: ${result.error_detail}`;
+          fillResult.textContent = "Auto-fill failed";
+        }
+      } catch (error) {
+        console.error('Auto-fill error:', error);
+        fillStatus.textContent = `Error: ${error.message}`;
+        fillResult.textContent = "Auto-fill failed";
+      } finally {
+        autoFillBtn.disabled = false;
+      }
+    }
+
+    // New function to poll for fill results
+    async function pollFillResult (sha256) {
+      const fillStatus = document.getElementById('fillStatus');
+      const fillResult = document.getElementById('fillResult');
+      const endpoint = getApiEndpoint('/process');
+      const maxAttempts = 300;
+      let attempts = 0;
+
+      const poll = async () => {
+        attempts++;
+        try {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              client_id: clientInfo.clientId,
+              type: 'fill',
+              SHA256: sha256,
+              has_content: false
+            })
+          });
+
+          const result = await response.json();
+          if (result.status === 'processing') {
+            fillStatus.textContent = `Processing auto-fill... (${attempts}/${maxAttempts})`;
+            if (attempts < maxAttempts) {
+              setTimeout(poll, 1000);
+            } else {
+              fillStatus.textContent = "Auto-fill timed out";
+              fillResult.textContent = "Processing took too long";
+            }
+          } else if (result.status === 'completed') {
+            await handleFillResult(result, sha256);
+          } else if (result.status === 'error') {
+            fillStatus.textContent = `Error: ${result.error_detail}`;
+            fillResult.textContent = "Auto-fill failed";
+          }
+        } catch (error) {
+          console.error('Polling error:', error);
+          fillStatus.textContent = `Error: ${error.message}`;
+          fillResult.textContent = "Polling failed";
+        }
+      };
+
+      await poll();
+    }
+
+    // New function to handle fill results
+    async function handleFillResult (result, sha256) {
+      const fillStatus = document.getElementById('fillStatus');
+      const fillResult = document.getElementById('fillResult');
+
+      try {
+        const aesKeyBytes = aesKeyCache[sha256];
+        if (!aesKeyBytes) {
+          throw new Error("AES key not found for this request");
+        }
+
+        const decryptedResult = await aesDecrypt(result.result, aesKeyBytes);
+        const resultObj = JSON.parse(decryptedResult);
+
+        fillResult.innerHTML = renderFillResult(resultObj);
+        fillStatus.textContent = "Auto-fill completed!";
+
+        delete aesKeyCache[sha256];
+      } catch (error) {
+        console.error('Fill result handling error:', error);
+        fillStatus.textContent = "Error processing fill result";
+        fillResult.textContent = "Failed to decrypt or parse result";
+      }
+    }
+
+    function renderResults (data) {
+      if (!data) return "No results";
+      if (isFillResult(data)) {
+        return renderFillResult(data);
+      }
+      return renderDocFormResult(data);
+    }
+
+    function isFillResult (data) {
+      if (typeof data !== 'object' || data === null) return false;
+      for (const key in data) {
+        if (typeof data[key] === 'object' && data[key] !== null) {
+          if ('value' in data[key] || 'source' in data[key]) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    function renderFillResult (data) {
+      let html = `<h3>Form Fill Results</h3><table><thead><tr><th>Field</th><th>Value</th><th>Source</th></tr></thead><tbody>`;
+      for (const [field, info] of Object.entries(data)) {
+        html += `<tr>
+          <td>${field}</td>
+          <td>${info.value || 'N/A'}</td>
+          <td>${info.source ? `${info.source.type} - ${info.source.resource_id}` : 'N/A'}</td>
+        </tr>`;
+      }
+      html += `</tbody></table>`;
+      return html;
+    }
+
+    function renderDocFormResult (data) {
+      let html = '';
+      if (data.title) {
+        html += `<h3>${data.title}</h3>`;
+      }
+      if (data.description) {
+        html += `<p><strong>Description:</strong> ${data.description}</p>`;
+      }
+      if (data.tags && data.tags.length > 0) {
+        html += `<h4>Tags:</h4><ul>`;
+        data.tags.forEach(tag => {
+          html += `<li>${tag}</li>`;
+        });
+        html += `</ul>`;
+      }
+      const kv = data.kv || data;
+      if (kv && Object.keys(kv).length > 0) {
+        html += `<h4>Key-Value Pairs:</h4><table><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>`;
+        for (const [key, value] of Object.entries(kv)) {
+          html += `<tr><td>${key}</td><td>${value}</td></tr>`;
+        }
+        html += `</tbody></table>`;
+      }
+      if (data.fields && data.fields.length > 0) {
+        html += `<h4>Form Fields:</h4><ul>`;
+        data.fields.forEach(field => {
+          html += `<li>${field}</li>`;
+        });
+        html += `</ul>`;
+      }
+      if (data.related && data.related.length > 0) {
+        html += `<h4>Related Resources:</h4><ul>`;
+        data.related.forEach(resource => {
+          html += `<li>${resource.type} - ${resource.resource_id}</li>`;
+        });
+        html += `</ul>`;
+      }
+      if (html === '') {
+        return `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+      }
+      return html;
+    }
+
+    // Event listeners
+    document.getElementById('processDocBtn').addEventListener('click', () => {
+      processFiles('doc', 'docInput',
+        document.getElementById('docStatus'),
+        document.getElementById('docResult'));
+    });
+
+    document.getElementById('processFormBtn').addEventListener('click', () => {
+      processFiles('form', 'formInput',
+        document.getElementById('formStatus'),
+        document.getElementById('formResult'));
+    });
+
+    // New event listener for auto-fill button
+    document.getElementById('autoFillBtn').addEventListener('click', processFill);
+  </script>
+</body>
+
+</html>
