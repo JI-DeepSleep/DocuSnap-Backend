@@ -86,7 +86,7 @@ Next, you wanna setup the backend RSA keys and other private settings.
 
 Now, `python3 app.py` and you should be able to visit the website at [http://127.0.0.1:5000/](http://127.0.0.1:5000/) or whatever port you use. 
 
-If you visit that URL, you'll find that we've implemented a mockup webui to easy backend developing. Try some sample images in the sample folder to make sure it is working! Of course, this is just a mockup webui and is not the whole DocuSnap experience (for example, the file_lib is hardcoded in the webui).
+If you visit that URL, you'll find that we've implemented a mockup webui to easy backend developing. Try some images to make sure it is working! Of course, this is just a mockup webui and is not the whole DocuSnap experience (for example, the file_lib is hardcoded in the webui).
 
 ### Start Prompt Engineering
 
@@ -98,6 +98,6 @@ Then check `app.py` and look for `process_task` function. The `construct_prompt_
 
 ## Deploying the Backend
 
-If you're in Team DeepSleep, contact Zijun to get an ed25519 key to the server.
+If you're in Team DeepSleep, checkout the private repo. 
 
 If you're not in Team DeepSleep, we recommend following the best practice of deploying a flask project (with gunicorn + nginx for example). 
