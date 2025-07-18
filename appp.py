@@ -21,7 +21,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from priv_sets import (
     LLM_API_KEY,
     EXPIRE_MINUTES,
-    PROCESS_TIMEOUT,
     LLM_MODEL,
     RSA_PRIVATE_KEY,
     OCR_API_PREFIX,
@@ -204,39 +203,16 @@ def call_llm(prompt, type):
 
 
 def cleanup_old_entries():
-    current_time = datetime.now(timezone.utc)
-
-    expire_cutoff = current_time - timedelta(minutes=EXPIRE_MINUTES)
-    expire_cutoff_str = expire_cutoff.strftime("%Y-%m-%d %H:%M:%S")
-
-    timeout_cutoff = current_time - timedelta(minutes=PROCESS_TIMEOUT)
-    timeout_cutoff_str = timeout_cutoff.strftime("%Y-%m-%d %H:%M:%S")
-
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=EXPIRE_MINUTES)
+    cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
     conn = sqlite3.connect("tasks.db")
     c = conn.cursor()
-
-    try:
-        c.execute(
-            """
-            UPDATE tasks
-            SET status = 'error',
-                error_detail = 'PROCESSING_TIMEOUT'
-            WHERE status = 'processing'
-            AND created_at < ?
-            """,
-            (timeout_cutoff_str,),
-        )
-
-        c.execute(
-            "DELETE FROM tasks WHERE last_accessed < ? ",
-            (expire_cutoff_str,),
-        )
-
-        conn.commit()
-    except Exception as e:
-        app.logger.error(f"Cleanup failed: {str(e)}")
-    finally:
-        conn.close()
+    c.execute(
+        "DELETE FROM tasks WHERE last_accessed < ? ",
+        (cutoff_str,),
+    )
+    conn.commit()
+    conn.close()
 
 
 def remove_think_tags(input_string):
