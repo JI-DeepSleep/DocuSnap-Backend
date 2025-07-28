@@ -1,7 +1,7 @@
 # MkDocs Configuration for DocuSnap-Backend Architecture Analysis
 site_name: DocuSnap-Backend Architecture Analysis
 site_description: DocuSnap-Backend System Architecture Analysis Documentation
-site_author: Ziming Zhou
+site_author: JI-DeepSleep
 site_url: ""
 
 # Repository
@@ -10,7 +10,7 @@ repo_url: https://github.com/JI-DeepSleep/DocuSnap-Backend
 edit_uri: ""
 
 # Copyright
-copyright: Copyright &copy; 2025 Ziming Zhou
+copyright: Copyright &copy; 2025 JI-DeepSleep
 
 # Configuration
 theme:
