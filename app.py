@@ -176,6 +176,7 @@ def call_llm(prompt, type):
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             response_format={"type": "json_object"},
+            thinking={"type": "disabled"},
         )
         task_id = response.id
         while True:
@@ -185,6 +186,8 @@ def call_llm(prompt, type):
                 )
             )
             if result_response.task_status == "SUCCESS":
+                app.logger.debug("LLM RAW OUTPUT:")
+                app.logger.debug(result_response.choices[0].message.content)
                 rst = remove_think_tags(
                     result_response.choices[0].message.content
                 )
