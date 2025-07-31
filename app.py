@@ -31,6 +31,8 @@ from priv_sets import (
 )
 from prompts import DOC_PROMPT, FORM_PROMPT, FILL_PROMPT
 
+PRINT_MESSAGES = os.environ.get("PRINT_MESSAGE", "false").lower() == "true"
+
 app = Flask(__name__)
 task_queue = Queue()
 client = ZhipuAI(api_key=LLM_API_KEY)
@@ -65,6 +67,52 @@ def init_db():
 
 
 init_db()
+
+
+def log_message(message_type, data):
+    if PRINT_MESSAGES:
+        try:
+            app.logger.debug(
+                f"\n===== {message_type} =====\n{json.dumps(data, indent=2, ensure_ascii=False)}\n"
+            )
+        except:
+            app.logger.debug(
+                f"\n===== {message_type} (non-JSON) =====\n{str(data)[:1000]}\n"
+            )
+
+
+@app.before_request
+def log_request():
+    if PRINT_MESSAGES and request.endpoint in [
+        "unified_process",
+        "clear_cache",
+    ]:
+        log_data = {
+            "method": request.method,
+            "path": request.path,
+            "headers": dict(request.headers),
+            "args": request.args,
+            "json": request.get_json(silent=True) or {},
+        }
+        log_message("REQUEST RECEIVED", log_data)
+
+
+@app.after_request
+def log_response(response):
+    if PRINT_MESSAGES and request.endpoint in [
+        "unified_process",
+        "clear_cache",
+    ]:
+        resp_data = {
+            "status": response.status,
+            "headers": dict(response.headers),
+            "data": (
+                response.get_json(silent=True)
+                or response.data.decode("utf-8")[:1000]
+            ),
+        }
+        log_message("RESPONSE SENT", resp_data)
+    return response
 
 
 def get_current_utc_time():
@@ -186,8 +234,10 @@ def call_llm(prompt, type):
                 )
             )
             if result_response.task_status == "SUCCESS":
-                app.logger.debug("LLM RAW OUTPUT:")
-                app.logger.debug(result_response.choices[0].message.content)
+                if PRINT_MESSAGES:
+                    app.logger.debug(
+                        f"LLM raw output: \n{result_response.choices[0].message.content}"
+                    )
                 rst = remove_think_tags(
                     result_response.choices[0].message.content
                 )
